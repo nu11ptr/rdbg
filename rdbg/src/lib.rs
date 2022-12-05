@@ -1,14 +1,15 @@
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Mutex;
 use std::{io, thread};
 
 const BIND_ADDR: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 13579;
-const BUFFER_SIZE: usize = 2048;
+const STREAM_BUFFER_SIZE: usize = 2048;
+const CHAN_MAX_MESSAGES: usize = 32;
 
-static SENDER: Mutex<Option<Sender<Message>>> = Mutex::new(None);
+static SENDER: Mutex<Option<SyncSender<Message>>> = Mutex::new(None);
 
 struct Message {
     filename: &'static str,
@@ -17,6 +18,15 @@ struct Message {
 }
 
 impl Message {
+    #[inline]
+    fn bogus() -> Self {
+        Message {
+            filename: "<bogus>",
+            line: 0,
+            msg: "".to_string(),
+        }
+    }
+
     fn write_to_buffer(&self, buffer: &mut Vec<u8>) {
         // For each string, write length first so we know boundaries on the other side
         buffer.extend(self.filename.len().to_be_bytes());
@@ -30,7 +40,7 @@ impl Message {
 }
 
 pub struct RemoteDebug {
-    sender: Sender<Message>,
+    sender: SyncSender<Message>,
 }
 
 impl RemoteDebug {
@@ -73,14 +83,23 @@ pub fn port(port: u16) -> RemoteDebug {
     RemoteDebug::new(port)
 }
 
-fn handle_connections(port: u16) -> Sender<Message> {
-    let (sender, receiver) = channel::<Message>();
+fn handle_connections(port: u16) -> SyncSender<Message> {
+    let (sender, receiver) = sync_channel::<Message>(CHAN_MAX_MESSAGES);
+
+    // Fill the channel the first time with bogus messages so that the first actual message will
+    // block. This forces the program to wait until a viewer is connected avoiding a race condition.
+    for _ in 0..CHAN_MAX_MESSAGES {
+        // We have no good way to report errors, so just unwrap and panic, if needed
+        // (should never happen as there is no way receiver could be closed right now)
+        sender.send(Message::bogus()).unwrap();
+    }
 
     thread::spawn(move || {
         let mut curr_msg = None;
+        let mut first_time = true;
 
         loop {
-            let mut buffer = Vec::with_capacity(BUFFER_SIZE);
+            let mut buffer = Vec::with_capacity(STREAM_BUFFER_SIZE);
 
             // We have no good way to report errors, so just unwrap and panic, if needed
             // (likely due to 'address in use' or 'permission denied', so we want to know about that
@@ -89,6 +108,18 @@ fn handle_connections(port: u16) -> Sender<Message> {
 
             // Per docs, 'incoming' will always return an entry
             if let Ok(mut stream) = listener.incoming().next().unwrap() {
+                // Only on the very first time do we dump all our bogus messages before processing
+                // the real ones
+                if first_time {
+                    for _ in 0..CHAN_MAX_MESSAGES {
+                        // We have no good way to report errors, so just unwrap and panic, if needed
+                        // (should never happen as there is no way sender could be closed right now)
+                        receiver.recv().unwrap();
+                    }
+
+                    first_time = false;
+                }
+
                 process_stream(&mut stream, &receiver, &mut curr_msg, &mut buffer);
             }
         }
@@ -109,7 +140,7 @@ fn process_stream(
             Some(msg) => msg,
             None => {
                 // We have no good way to report errors, so just unwrap and panic, if needed
-                // (this is likely impossible since our Sender is in a global var)
+                // (this is likely impossible since our SyncSender is in a global var)
                 *curr_msg = Some(receiver.recv().unwrap());
                 // Can't fail, stored above
                 curr_msg.as_ref().unwrap()
