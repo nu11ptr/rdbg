@@ -14,6 +14,60 @@ const WIRE_PROTOCOL_VERSION: u8 = 1;
 
 static SENDER: Mutex<Option<SyncSender<Message>>> = Mutex::new(None);
 
+/// Send a debug message to the remote viewer
+///
+/// ```
+/// let world = "world!";
+/// rdbg::msg!("Hello {}", world);
+///
+/// rdbg::msg!(rdbg::port(5000), ["Hello {}", world]);
+/// ```
+#[macro_export]
+macro_rules! msg {
+    ($port:expr, [ $($arg:tt)* ]) => {
+        $port.send_message(file!(), line!(), $crate::MsgPayload::Message(
+            std::fmt::format(format_args!($($arg)*))
+        ))
+    };
+
+    ($($arg:tt)*) => {
+        $crate::default().send_message(file!(), line!(), $crate::MsgPayload::Message(
+            std::fmt::format(format_args!($($arg)*))
+        ))
+    };
+}
+
+/// Send debug expression name/value pairs to the remote viewer
+///
+/// ```
+/// let world = "world!";
+/// rdbg::vals!(world, 1 + 1);
+///
+/// rdbg::vals!(rdbg::port(5000), [world, 1 + 1]);
+/// ```
+#[macro_export]
+macro_rules! vals {
+    ($port:expr, [ $($value:expr),+ $(,)? ]) => {
+        $port.send_message(file!(), line!(), $crate::MsgPayload::Values(vec![$((
+            match $value {
+                val => {
+                    (stringify!($value), format!("{:#?}", &val))
+                }
+            }
+        )),+]))
+    };
+
+    ($($value:expr),+ $(,)?) => {
+        $crate::default().send_message(file!(), line!(), $crate::MsgPayload::Values(vec![$((
+            match $value {
+                val => {
+                    (stringify!($value), format!("{:#?}", &val))
+                }
+            }
+        )),+]))
+    };
+}
+
 fn current_time() -> u64 {
     // This can only really fail if time goes to before the epoch, which likely isn't possible
     // on today's system clocks
@@ -36,7 +90,8 @@ enum MsgPayloadVal {
     Values = 2,
 }
 
-enum MsgPayload {
+#[doc(hidden)]
+pub enum MsgPayload {
     // A formatted string
     Message(String),
     // A list of name/value pairs from expressions
@@ -45,7 +100,7 @@ enum MsgPayload {
 
 impl MsgPayload {
     fn required_capacity(&self) -> usize {
-        match self {
+        (match self {
             MsgPayload::Message(msg) => required_str_capacity(msg),
             //  We start with 4 because we start by sending number of vec elements
             MsgPayload::Values(values) => {
@@ -53,7 +108,7 @@ impl MsgPayload {
                     acc + required_str_capacity(name) + required_str_capacity(value)
                 })
             }
-        }
+        }) + 1 // MsgPayloadVal
     }
 }
 
@@ -137,6 +192,7 @@ impl Message {
     }
 }
 
+#[doc(hidden)]
 pub struct RemoteDebug {
     sender: SyncSender<Message>,
 }
@@ -157,13 +213,31 @@ impl RemoteDebug {
 
         Self { sender }
     }
+
+    #[doc(hidden)]
+    pub fn send_message(&self, filename: &str, line: u32, payload: MsgPayload) {
+        // We have no good way to report errors, so just unwrap and panic, if needed
+        // (can likely only happen if our thread panics freeing the receiver)
+        self.sender
+            .send(Message::new(filename, line, payload))
+            .unwrap();
+    }
 }
 
+#[doc(hidden)]
 #[inline]
 pub fn default() -> RemoteDebug {
     RemoteDebug::new(DEFAULT_PORT)
 }
 
+/// Specify a custom port on the TCP socket when using the [msg] and [vals] macros
+///
+/// ```
+/// let world = "world!";
+/// rdbg::msg!(rdbg::port(5000), ["Hello {}", world]);
+///
+/// rdbg::vals!(rdbg::port(5000), [world, 1 + 1]);
+/// ```
 #[inline]
 pub fn port(port: u16) -> RemoteDebug {
     RemoteDebug::new(port)
