@@ -5,3 +5,7 @@ version = 3
 [[package]]
 name = "rdbg"
 version = "0.1.0"
+
+[[package]]
+name = "rdbg_view"
+version = "0.1.0"
