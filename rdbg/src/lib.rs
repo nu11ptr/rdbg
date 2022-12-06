@@ -2,40 +2,138 @@ use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{io, thread};
 
 const BIND_ADDR: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 13579;
-const STREAM_BUFFER_SIZE: usize = 2048;
+
 const CHAN_MAX_MESSAGES: usize = 32;
+const LEN_FIELD_SIZE: usize = 4;
+const WIRE_PROTOCOL_VERSION: u8 = 1;
 
 static SENDER: Mutex<Option<SyncSender<Message>>> = Mutex::new(None);
 
-struct Message {
-    filename: &'static str,
-    line: u32,
-    msg: String,
+fn current_time() -> u64 {
+    // This can only really fail if time goes to before the epoch, which likely isn't possible
+    // on today's system clocks
+    // While this returns a u128, u64 ought to be large enough to hold all ms since the epoch
+    // for our lifetimes
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_millis() as u64
 }
 
-impl Message {
-    #[inline]
-    fn bogus() -> Self {
-        Message {
-            filename: "<bogus>",
-            line: 0,
-            msg: "".to_string(),
+#[inline]
+fn required_str_capacity(s: &str) -> usize {
+    s.as_bytes().len() + LEN_FIELD_SIZE
+}
+
+#[repr(u8)]
+enum MsgPayloadVal {
+    Message = 1,
+    Values = 2,
+}
+
+enum MsgPayload {
+    // A formatted string
+    Message(String),
+    // A list of name/value pairs from expressions
+    Values(Vec<(&'static str, String)>),
+}
+
+impl MsgPayload {
+    fn required_capacity(&self) -> usize {
+        match self {
+            MsgPayload::Message(msg) => required_str_capacity(msg),
+            //  We start with 4 because we start by sending number of vec elements
+            MsgPayload::Values(values) => {
+                values.iter().fold(LEN_FIELD_SIZE, |acc, (name, value)| {
+                    acc + required_str_capacity(name) + required_str_capacity(value)
+                })
+            }
         }
     }
+}
 
-    fn write_to_buffer(&self, buffer: &mut Vec<u8>) {
-        // For each string, write length first so we know boundaries on the other side
-        buffer.extend(self.filename.len().to_be_bytes());
-        buffer.extend(self.filename.as_bytes());
+#[derive(Clone)]
+struct Message(Vec<u8>);
 
-        buffer.extend(self.line.to_be_bytes());
+impl Message {
+    fn new(filename: &str, line: u32, payload: MsgPayload) -> Self {
+        let time = current_time();
+        // This has to be made into a string as there doesn't seem to be a way to get any
+        // sort of integral version out of it (at least not in stable)
+        let thread_id = format!("{:?}", thread::current().id());
 
-        buffer.extend(self.msg.len().to_be_bytes());
-        buffer.extend(self.msg.as_bytes());
+        // Msg length + time + thread id + filename len + line # + payload len
+        let len = LEN_FIELD_SIZE // msg len
+            + 8 // time
+            + required_str_capacity(&thread_id)
+            + required_str_capacity(filename)
+            + 4 // line #
+            + payload.required_capacity();
+
+        let mut msg = Self(Vec::with_capacity(len));
+        msg.write_u32(len as u32);
+        msg.write_u64(time);
+        msg.write_str(&thread_id);
+        msg.write_str(filename);
+        msg.write_u32(line);
+        msg.write_payload(&payload);
+
+        debug_assert_eq!(msg.0.len(), len, "Bad message length");
+        msg
+    }
+
+    #[inline]
+    fn new_bogus() -> Self {
+        Self::new("<bogus>", 1, MsgPayload::Message("".to_string()))
+    }
+
+    #[inline]
+    fn as_slice(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+
+    #[inline]
+    fn write_str(&mut self, s: &str) {
+        self.write_u32(s.len() as u32);
+        self.0.extend(s.as_bytes());
+    }
+
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.0.extend(i.to_be_bytes());
+    }
+
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.0.extend(i.to_be_bytes());
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.0.extend(i.to_be_bytes());
+    }
+
+    fn write_payload(&mut self, payload: &MsgPayload) {
+        match payload {
+            MsgPayload::Message(msg) => {
+                self.write_u8(MsgPayloadVal::Message as u8);
+                self.write_str(msg);
+            }
+            MsgPayload::Values(values) => {
+                self.write_u8(MsgPayloadVal::Values as u8);
+                self.write_u32(values.len() as u32);
+
+                for (name, value) in values {
+                    self.write_str(name);
+                    self.write_str(value);
+                }
+            }
+        }
     }
 }
 
@@ -59,18 +157,6 @@ impl RemoteDebug {
 
         Self { sender }
     }
-
-    pub fn output(&self, msg: &str) {
-        // We have no good way to report errors, so just unwrap and panic, if needed
-        // (can likely only happen if our thread panics freeing the receiver)
-        self.sender
-            .send(Message {
-                filename: file!(),
-                line: line!(),
-                msg: msg.to_string(),
-            })
-            .unwrap();
-    }
 }
 
 #[inline]
@@ -88,10 +174,11 @@ fn handle_connections(port: u16) -> SyncSender<Message> {
 
     // Fill the channel the first time with bogus messages so that the first actual message will
     // block. This forces the program to wait until a viewer is connected avoiding a race condition.
+    let msg = Message::new_bogus();
     for _ in 0..CHAN_MAX_MESSAGES {
         // We have no good way to report errors, so just unwrap and panic, if needed
         // (should never happen as there is no way receiver could be closed right now)
-        sender.send(Message::bogus()).unwrap();
+        sender.send(msg.clone()).unwrap();
     }
 
     thread::spawn(move || {
@@ -99,8 +186,6 @@ fn handle_connections(port: u16) -> SyncSender<Message> {
         let mut first_time = true;
 
         loop {
-            let mut buffer = Vec::with_capacity(STREAM_BUFFER_SIZE);
-
             // We have no good way to report errors, so just unwrap and panic, if needed
             // (likely due to 'address in use' or 'permission denied', so we want to know about that
             // not mysteriously just not receive messages)
@@ -120,7 +205,7 @@ fn handle_connections(port: u16) -> SyncSender<Message> {
                     first_time = false;
                 }
 
-                process_stream(&mut stream, &receiver, &mut curr_msg, &mut buffer);
+                process_stream(&mut stream, &receiver, &mut curr_msg);
             }
         }
     });
@@ -132,8 +217,12 @@ fn process_stream(
     stream: &mut TcpStream,
     receiver: &Receiver<Message>,
     curr_msg: &mut Option<Message>,
-    buffer: &mut Vec<u8>,
 ) {
+    // If we hit an error writing out the version just return since we have no good way to report
+    if write_to_stream(&WIRE_PROTOCOL_VERSION.to_be_bytes(), stream).is_err() {
+        return;
+    }
+
     loop {
         // If we were interrupted sending last message then resend otherwise wait for a new message
         let msg = match &curr_msg {
@@ -147,10 +236,7 @@ fn process_stream(
             }
         };
 
-        buffer.clear();
-        msg.write_to_buffer(buffer);
-
-        match write_to_stream(buffer, stream) {
+        match write_to_stream(msg.as_slice(), stream) {
             Ok(_) => {
                 // Success, don't resend this message again
                 *curr_msg = None;
@@ -164,13 +250,13 @@ fn process_stream(
 }
 
 fn write_to_stream(buffer: &[u8], stream: &mut TcpStream) -> io::Result<()> {
-    let mut written = 0;
+    let mut index = 0;
 
     // Keep writing until everything in the buffer has been written or we get an error
-    while written < buffer.len() {
-        match stream.write(buffer) {
+    while index < buffer.len() {
+        match stream.write(&buffer[index..]) {
             Ok(wrote) => {
-                written += wrote;
+                index += wrote;
             }
             Err(err) => {
                 return Err(err);
