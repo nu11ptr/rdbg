@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::mem::size_of;
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Mutex;
@@ -9,10 +10,12 @@ const BIND_ADDR: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 13579;
 
 const CHAN_MAX_MESSAGES: usize = 32;
-const LEN_FIELD_SIZE: usize = 4;
+const LEN_FIELD_SIZE: usize = size_of::<u32>();
 const WIRE_PROTOCOL_VERSION: u8 = 1;
 
 static SENDER: Mutex<Option<SyncSender<Message>>> = Mutex::new(None);
+
+// *** msg / vals macros ***
 
 /// Send a debug message to the remote viewer
 ///
@@ -31,7 +34,7 @@ macro_rules! msg {
     };
 
     ($($arg:tt)*) => {
-        $crate::default().send_message(file!(), line!(), $crate::MsgPayload::Message(
+        $crate::RemoteDebug::default().send_message(file!(), line!(), $crate::MsgPayload::Message(
             std::fmt::format(format_args!($($arg)*))
         ))
     };
@@ -58,7 +61,7 @@ macro_rules! vals {
     };
 
     ($($value:expr),+ $(,)?) => {
-        $crate::default().send_message(file!(), line!(), $crate::MsgPayload::Values(vec![$((
+        $crate::RemoteDebug::default().send_message(file!(), line!(), $crate::MsgPayload::Values(vec![$((
             match $value {
                 val => {
                     (stringify!($value), format!("{:#?}", &val))
@@ -67,6 +70,8 @@ macro_rules! vals {
         )),+]))
     };
 }
+
+// *** Message related functions ***
 
 fn current_time() -> u64 {
     // This can only really fail if time goes to before the epoch, which likely isn't possible
@@ -84,11 +89,15 @@ fn required_str_capacity(s: &str) -> usize {
     s.as_bytes().len() + LEN_FIELD_SIZE
 }
 
+// *** MsgPayloadVal ***
+
 #[repr(u8)]
 enum MsgPayloadVal {
     Message = 1,
     Values = 2,
 }
+
+// *** MsgPayload ***
 
 #[doc(hidden)]
 #[derive(Clone, Debug)]
@@ -109,9 +118,11 @@ impl MsgPayload {
                     acc + required_str_capacity(name) + required_str_capacity(value)
                 })
             }
-        }) + 1 // MsgPayloadVal
+        }) + size_of::<MsgPayloadVal>()
     }
 }
+
+// *** Message ***
 
 #[doc(hidden)]
 #[derive(Clone, Debug)]
@@ -126,10 +137,10 @@ impl Message {
 
         // Msg length + time + thread id + filename len + line # + payload len
         let len = LEN_FIELD_SIZE // msg len
-            + 8 // time
+            + size_of::<u64>() // time
             + required_str_capacity(&thread_id)
             + required_str_capacity(filename)
-            + 4 // line #
+            + size_of::<u32>() // line #
             + payload.required_capacity();
 
         let mut msg = Self(Vec::with_capacity(len));
@@ -194,6 +205,8 @@ impl Message {
     }
 }
 
+// *** RemoteDebug ***
+
 #[doc(hidden)]
 pub struct RemoteDebug {
     sender: SyncSender<Message>,
@@ -226,12 +239,14 @@ impl RemoteDebug {
     }
 }
 
-#[doc(hidden)]
-#[inline]
-pub fn default() -> RemoteDebug {
-    RemoteDebug::new(DEFAULT_PORT)
+impl Default for RemoteDebug {
+    fn default() -> Self {
+        Self::new(DEFAULT_PORT)
+    }
 }
 
+// NOTE: This function isn't a part of RemoteDebug simply to make it a few less key strokes for the
+// user in case they want to include this on every macro invocation.
 /// Specify a custom port on the TCP socket when using the [msg] and [vals] macros
 ///
 /// ```

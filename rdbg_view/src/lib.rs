@@ -1,8 +1,8 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::io::Read;
 use std::mem::size_of;
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::str::Utf8Error;
+use std::net::{AddrParseError, IpAddr, SocketAddr, TcpStream};
+use std::str::{FromStr, Utf8Error};
 use std::time::Duration;
 use std::{io, thread};
 
@@ -11,8 +11,10 @@ const DEFAULT_PORT: u16 = 13579;
 
 const CONNECT_WAIT_TIME: u64 = 100; // Milliseconds
 const BUFFER_SIZE: usize = 4096;
-const LEN_FIELD_SIZE: usize = 4;
+const LEN_FIELD_SIZE: usize = size_of::<u32>();
 const WIRE_PROTOCOL_VERSION: u8 = 1;
+
+// *** MsgPayloadVal ***
 
 #[repr(u8)]
 enum MsgPayloadVal {
@@ -39,6 +41,8 @@ impl TryFrom<u8> for MsgPayloadVal {
     }
 }
 
+// *** ByteBuffer ***
+
 struct ByteBuffer {
     buffer: Vec<u8>,
     idx: usize,
@@ -58,7 +62,7 @@ impl ByteBuffer {
     fn read_from_stream(&mut self, stream: &mut TcpStream, size: usize) -> io::Result<()> {
         self.buffer.resize(size, 0);
         stream.read_exact(&mut self.buffer)?;
-        // We start over every type we read
+        // We start over every time we read
         self.idx = 0;
         Ok(())
     }
@@ -100,7 +104,11 @@ impl ByteBuffer {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+// *** MsgPayload ***
+
+/// The payload as sent by the remote program - this can either be a string message or a list
+/// of expressions and their values
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MsgPayload {
     /// A formatted string
     Message(String),
@@ -133,12 +141,21 @@ impl MsgPayload {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+// *** Message ***
+
+/// The primary structure. Represents all the fields of debug informaiton as received from the
+/// debugged program
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Message {
+    /// The time at the exact moment the debug message was triggered in the remote program
     pub time: u64,
+    /// The thread ID that invoked the message in the remote program
     pub thread_id: String,
+    /// The filename that invoked the message in the remote program
     pub filename: String,
+    /// The line number at which the message was invoked in the remote program
     pub line: u32,
+    /// The message OR expression values sent from the remote program
     pub payload: MsgPayload,
 }
 
@@ -219,9 +236,15 @@ mod tests {
     }
 }
 
+// *** Error ***
+
+/// Errors that can occur based on data received from the debugged program
 pub enum Error {
+    /// The remote debugged program is using a different version of rdbg that is incompatible
     BadVersion,
+    /// A string in the [Message] was not valid UTF8
     BadUtf8(Utf8Error),
+    /// The binary payload of the [Message] was corrupted and could not be decoded
     CorruptMsg,
 }
 
@@ -244,13 +267,30 @@ impl Display for Error {
 
 impl std::error::Error for Error {}
 
+// *** Event ***
+
+/// This represents various events that occur during iteration and are returned by [MsgIterator]
 pub enum Event {
+    /// Returned when attached to debugged program
     Connected(SocketAddr),
+    /// Returned when loses connection to debugged program
     Disconnected(SocketAddr),
+    /// Returned when a new message from the debugged program arrives
     Message(Message),
+    /// Returned when an error occurs during iteration
     Error(Error),
 }
 
+// *** MsgIterator ***
+
+/// An iterator that returns [Event]s based on a connection to the debugged program. The primary
+/// objective is to receive [Message]s
+///
+/// This iterator never completes (so [Option] is never `None`). If a disconnect occurs, it will
+/// simply wait for a new connection and then continue returning messages.
+///
+/// This iterator doesn't return errors directly wrapped in [Result], but instead returns [Event] enums
+/// which might include an error variant.
 pub struct MsgIterator {
     addr: SocketAddr,
     stream: Option<TcpStream>,
@@ -258,25 +298,21 @@ pub struct MsgIterator {
 }
 
 impl MsgIterator {
+    /// Create a new message iterator to a custom destination IP and port
     #[inline]
-    pub fn from_socket_addr<A: ToSocketAddrs<Iter = SocketAddr>>(addr: A) -> io::Result<Self> {
-        Ok(Self::new(addr.to_socket_addrs()?))
-    }
-
-    #[inline]
-    pub fn new(addr: SocketAddr) -> Self {
-        Self {
-            addr,
+    pub fn new(ip: &str, port: u16) -> Result<Self, AddrParseError> {
+        Ok(Self {
+            addr: SocketAddr::new(IpAddr::from_str(ip)?, port),
             stream: None,
             buffer: ByteBuffer::new(BUFFER_SIZE),
-        }
+        })
     }
 }
 
 impl Default for MsgIterator {
     #[inline]
     fn default() -> Self {
-        Self::new(SocketAddr::new(DEFAULT_ADDR.parse().unwrap(), DEFAULT_PORT))
+        Self::new(DEFAULT_ADDR, DEFAULT_PORT).unwrap()
     }
 }
 
