@@ -143,11 +143,11 @@ impl MsgPayload {
 
 // *** Message ***
 
-/// The primary structure. Represents all the fields of debug informaiton as received from the
+/// The primary structure. Represents all the fields of debug information as received from the
 /// debugged program
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Message {
-    /// The time at the exact moment the debug message was triggered in the remote program
+    /// Milliseconds since epoch at the exact moment the debug message was triggered in the remote program
     pub time: u64,
     /// The thread ID that invoked the message in the remote program
     pub thread_id: String,
