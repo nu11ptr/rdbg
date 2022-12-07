@@ -277,8 +277,6 @@ pub enum Event {
     Disconnected(SocketAddr),
     /// Returned when a new message from the debugged program arrives
     Message(Message),
-    /// Returned when an error occurs during iteration
-    Error(Error),
 }
 
 // *** MsgIterator ***
@@ -289,8 +287,8 @@ pub enum Event {
 /// This iterator never completes (so [Option] is never `None`). If a disconnect occurs, it will
 /// simply wait for a new connection and then continue returning messages.
 ///
-/// This iterator doesn't return errors directly wrapped in [Result], but instead returns [Event] enums
-/// which might include an error variant.
+/// This iterator returns a [Result] with either the next [Event] or an [Error]. Errors are not
+/// fatal and the user and handle (or not handle) as they see fit.
 pub struct MsgIterator {
     addr: SocketAddr,
     stream: Option<TcpStream>,
@@ -317,7 +315,7 @@ impl Default for MsgIterator {
 }
 
 impl Iterator for MsgIterator {
-    type Item = Event;
+    type Item = Result<Event, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.stream {
@@ -328,21 +326,21 @@ impl Iterator for MsgIterator {
 
                     match self.buffer.read_from_stream(stream, len as usize) {
                         Ok(_) => match Message::from_buffer(&mut self.buffer) {
-                            Ok(msg) => Some(Event::Message(msg)),
+                            Ok(msg) => Some(Ok(Event::Message(msg))),
                             Err(err) => {
                                 self.stream = None;
-                                Some(Event::Error(err))
+                                Some(Err(err))
                             }
                         },
                         Err(_) => {
                             self.stream = None;
-                            Some(Event::Disconnected(self.addr))
+                            Some(Ok(Event::Disconnected(self.addr)))
                         }
                     }
                 }
                 Err(_) => {
                     self.stream = None;
-                    Some(Event::Disconnected(self.addr))
+                    Some(Ok(Event::Disconnected(self.addr)))
                 }
             },
             None => loop {
@@ -351,9 +349,9 @@ impl Iterator for MsgIterator {
                         // We know this is long enough - guaranteed by read above
                         Ok(_) if self.buffer.read_u8().unwrap() == WIRE_PROTOCOL_VERSION => {
                             self.stream = Some(stream);
-                            return Some(Event::Connected(self.addr));
+                            return Some(Ok(Event::Connected(self.addr)));
                         }
-                        Ok(_) => return Some(Event::Error(Error::BadVersion)),
+                        Ok(_) => return Some(Err(Error::BadVersion)),
                         Err(_) => {
                             // No op
                         }

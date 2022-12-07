@@ -7,16 +7,18 @@ fn main() {
 
     for event in iterator {
         match event {
-            Event::Connected(addr) => {
-                eprintln!("*** Connected to {addr} ***");
-            }
-            Event::Disconnected(addr) => {
-                eprintln!("*** Disconnected from {addr} ***");
-            }
-            Event::Message(msg) => {
-                println!("{msg:#?}");
-            }
-            Event::Error(err) => match err {
+            Ok(event) => match event {
+                Event::Connected(addr) => {
+                    eprintln!("*** Connected to {addr} ***");
+                }
+                Event::Disconnected(addr) => {
+                    eprintln!("*** Disconnected from {addr} ***");
+                }
+                Event::Message(msg) => {
+                    println!("{msg:#?}");
+                }
+            },
+            Err(err) => match err {
                 Error::BadVersion => {
                     eprintln!("*** Bad version (we only understand wire protocol 1) ***");
                     break;
