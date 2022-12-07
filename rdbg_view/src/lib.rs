@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::io::Read;
+use std::mem::size_of;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::str::Utf8Error;
 use std::time::Duration;
@@ -20,12 +21,9 @@ enum MsgPayloadVal {
 }
 
 impl MsgPayloadVal {
-    fn from_buffer(buffer: &[u8]) -> Result<MsgPayloadVal, Error> {
-        if !buffer.is_empty() {
-            Ok(buffer[0].try_into()?)
-        } else {
-            Err(Error::CorruptMsg)
-        }
+    #[inline]
+    fn from_buffer(buffer: &mut ByteBuffer) -> Result<MsgPayloadVal, Error> {
+        buffer.read_u8()?.try_into()
     }
 }
 
@@ -41,33 +39,68 @@ impl TryFrom<u8> for MsgPayloadVal {
     }
 }
 
-fn read_u64(buffer: &[u8]) -> Result<u64, Error> {
-    Ok(u64::from_be_bytes(
-        buffer.try_into().map_err(|_| Error::CorruptMsg)?,
-    ))
+struct ByteBuffer {
+    buffer: Vec<u8>,
+    idx: usize,
 }
 
-fn read_u32(buffer: &[u8]) -> Result<u32, Error> {
-    Ok(u32::from_be_bytes(
-        buffer.try_into().map_err(|_| Error::CorruptMsg)?,
-    ))
-}
+impl ByteBuffer {
+    #[inline]
+    fn new(capacity: usize) -> Self {
+        Self::from_vec(Vec::with_capacity(capacity))
+    }
 
-fn read_str(buffer: &[u8]) -> Result<(String, usize), Error> {
-    let len = read_u32(&buffer[0..])?;
-    let next_idx = len as usize + LEN_FIELD_SIZE;
+    #[inline]
+    fn from_vec(buffer: Vec<u8>) -> Self {
+        Self { buffer, idx: 0 }
+    }
 
-    if buffer.len() >= next_idx {
-        match std::str::from_utf8(&buffer[LEN_FIELD_SIZE..next_idx]) {
-            Ok(str) => Ok((str.to_string(), next_idx)),
+    fn read_from_stream(&mut self, stream: &mut TcpStream, size: usize) -> io::Result<()> {
+        self.buffer.resize(size, 0);
+        stream.read_exact(&mut self.buffer)?;
+        // We start over every type we read
+        self.idx = 0;
+        Ok(())
+    }
+
+    fn as_slice(&mut self, len: usize) -> Result<&[u8], Error> {
+        if self.idx + len <= self.buffer.len() {
+            self.idx += len;
+            Ok(&self.buffer[(self.idx - len)..self.idx])
+        } else {
+            Err(Error::CorruptMsg)
+        }
+    }
+
+    fn read_u8(&mut self) -> Result<u8, Error> {
+        Ok(u8::from_be_bytes(
+            self.as_slice(size_of::<u8>())?.try_into().unwrap(),
+        ))
+    }
+
+    fn read_u64(&mut self) -> Result<u64, Error> {
+        Ok(u64::from_be_bytes(
+            self.as_slice(size_of::<u64>())?.try_into().unwrap(),
+        ))
+    }
+
+    fn read_u32(&mut self) -> Result<u32, Error> {
+        Ok(u32::from_be_bytes(
+            self.as_slice(size_of::<u32>())?.try_into().unwrap(),
+        ))
+    }
+
+    fn read_str(&mut self) -> Result<String, Error> {
+        let len = self.read_u32()?;
+
+        match std::str::from_utf8(self.as_slice(len as usize)?) {
+            Ok(str) => Ok(str.to_string()),
             Err(err) => Err(Error::BadUtf8(err)),
         }
-    } else {
-        Err(Error::CorruptMsg)
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum MsgPayload {
     /// A formatted string
     Message(String),
@@ -76,24 +109,22 @@ pub enum MsgPayload {
 }
 
 impl MsgPayload {
-    fn from_buffer(buffer: &[u8]) -> Result<Self, Error> {
+    fn from_buffer(buffer: &mut ByteBuffer) -> Result<Self, Error> {
         match MsgPayloadVal::from_buffer(buffer)? {
             MsgPayloadVal::Message => {
-                let (s, _) = read_str(buffer)?;
+                let s = buffer.read_str()?;
                 Ok(MsgPayload::Message(s))
             }
             MsgPayloadVal::Values => {
-                let len = read_u32(buffer)?;
+                let len = buffer.read_u32()?;
                 // TODO: Do we need to protect against VERY large values here? We will still check
                 // bounds but not before a LOT of memory could be allocated
                 let mut values = Vec::with_capacity(len as usize);
 
-                let mut idx = LEN_FIELD_SIZE;
                 for _ in 0..len {
-                    let (name, next_idx) = read_str(&buffer[idx..])?;
-                    let (val, next_idx) = read_str(&buffer[next_idx..])?;
+                    let name = buffer.read_str()?;
+                    let val = buffer.read_str()?;
                     values.push((name, val));
-                    idx = next_idx;
                 }
 
                 Ok(MsgPayload::Values(values))
@@ -102,7 +133,7 @@ impl MsgPayload {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct Message {
     pub time: u64,
     pub thread_id: String,
@@ -112,12 +143,12 @@ pub struct Message {
 }
 
 impl Message {
-    fn from_buffer(buffer: &[u8]) -> Result<Message, Error> {
-        let time = read_u64(&buffer[0..])?;
-        let (thread_id, next_idx) = read_str(&buffer[8..])?;
-        let (filename, next_idx) = read_str(&buffer[next_idx..])?;
-        let line = read_u32(&buffer[next_idx..])?;
-        let payload = MsgPayload::from_buffer(&buffer[next_idx + 4..])?;
+    fn from_buffer(buffer: &mut ByteBuffer) -> Result<Message, Error> {
+        let time = buffer.read_u64()?;
+        let thread_id = buffer.read_str()?;
+        let filename = buffer.read_str()?;
+        let line = buffer.read_u32()?;
+        let payload = MsgPayload::from_buffer(buffer)?;
 
         Ok(Self {
             time,
@@ -126,6 +157,65 @@ impl Message {
             line,
             payload,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::thread;
+
+    use crate::{ByteBuffer, LEN_FIELD_SIZE};
+
+    #[test]
+    fn deserialize_msg() {
+        let filename = file!();
+        let line: u32 = line!();
+        let message = "message".to_string();
+
+        let raw_msg =
+            rdbg::Message::new(filename, line, rdbg::MsgPayload::Message(message.clone()));
+
+        let expected_msg = crate::Message {
+            time: 42,
+            thread_id: format!("{:?}", thread::current().id()),
+            filename: filename.to_string(),
+            line,
+            payload: crate::MsgPayload::Message(message),
+        };
+        let mut buffer = ByteBuffer::from_vec(raw_msg.as_slice()[LEN_FIELD_SIZE..].to_vec());
+        let mut actual_msg = crate::Message::from_buffer(&mut buffer).expect("Corrupt message");
+
+        // Cheat on time since we have no way to know exact time
+        actual_msg.time = expected_msg.time;
+        assert_eq!(expected_msg, actual_msg);
+    }
+
+    #[test]
+    fn deserialize_vals() {
+        let filename = file!();
+        let line: u32 = line!();
+        let values = vec![("name1", "val1".to_string()), ("name2", "val2".to_string())];
+
+        let raw_msg = rdbg::Message::new(filename, line, rdbg::MsgPayload::Values(values.clone()));
+
+        let expected_msg = crate::Message {
+            time: 42,
+            thread_id: format!("{:?}", thread::current().id()),
+            filename: filename.to_string(),
+            line,
+            payload: crate::MsgPayload::Values(
+                values
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect(),
+            ),
+        };
+        let mut buffer = ByteBuffer::from_vec(raw_msg.as_slice()[LEN_FIELD_SIZE..].to_vec());
+        let mut actual_msg = crate::Message::from_buffer(&mut buffer).expect("Corrupt message");
+
+        // Cheat on time since we have no way to know exact time
+        actual_msg.time = expected_msg.time;
+        assert_eq!(expected_msg, actual_msg);
     }
 }
 
@@ -164,7 +254,7 @@ pub enum Event {
 pub struct MsgIterator {
     addr: SocketAddr,
     stream: Option<TcpStream>,
-    buffer: Vec<u8>,
+    buffer: ByteBuffer,
 }
 
 impl MsgIterator {
@@ -178,7 +268,7 @@ impl MsgIterator {
         Self {
             addr,
             stream: None,
-            buffer: Vec::with_capacity(BUFFER_SIZE),
+            buffer: ByteBuffer::new(BUFFER_SIZE),
         }
     }
 }
@@ -195,16 +285,17 @@ impl Iterator for MsgIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.stream {
-            Some(stream) => match read_from_stream(&mut self.buffer, stream, LEN_FIELD_SIZE) {
+            Some(stream) => match self.buffer.read_from_stream(stream, LEN_FIELD_SIZE) {
                 Ok(_) => {
-                    let len = u32::from_be_bytes((&*self.buffer).try_into().unwrap());
+                    // We know this is long enough - guaranteed by read above
+                    let len = self.buffer.read_u32().unwrap();
 
-                    match read_from_stream(&mut self.buffer, stream, len as usize) {
-                        Ok(_) => match Message::from_buffer(&self.buffer) {
+                    match self.buffer.read_from_stream(stream, len as usize) {
+                        Ok(_) => match Message::from_buffer(&mut self.buffer) {
                             Ok(msg) => Some(Event::Message(msg)),
-                            Err(_) => {
+                            Err(err) => {
                                 self.stream = None;
-                                Some(Event::Disconnected(self.addr))
+                                Some(Event::Error(err))
                             }
                         },
                         Err(_) => {
@@ -220,8 +311,9 @@ impl Iterator for MsgIterator {
             },
             None => loop {
                 if let Ok(mut stream) = TcpStream::connect(self.addr) {
-                    match read_from_stream(&mut self.buffer, &mut stream, 1) {
-                        Ok(_) if self.buffer[0] == WIRE_PROTOCOL_VERSION => {
+                    match self.buffer.read_from_stream(&mut stream, size_of::<u8>()) {
+                        // We know this is long enough - guaranteed by read above
+                        Ok(_) if self.buffer.read_u8().unwrap() == WIRE_PROTOCOL_VERSION => {
                             self.stream = Some(stream);
                             return Some(Event::Connected(self.addr));
                         }
@@ -236,9 +328,4 @@ impl Iterator for MsgIterator {
             },
         }
     }
-}
-
-fn read_from_stream(buffer: &mut Vec<u8>, stream: &mut TcpStream, size: usize) -> io::Result<()> {
-    buffer.resize(size, 0);
-    stream.read_exact(buffer)
 }

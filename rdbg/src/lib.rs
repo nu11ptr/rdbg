@@ -91,6 +91,7 @@ enum MsgPayloadVal {
 }
 
 #[doc(hidden)]
+#[derive(Clone, Debug)]
 pub enum MsgPayload {
     // A formatted string
     Message(String),
@@ -112,11 +113,12 @@ impl MsgPayload {
     }
 }
 
-#[derive(Clone)]
-struct Message(Vec<u8>);
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct Message(Vec<u8>);
 
 impl Message {
-    fn new(filename: &str, line: u32, payload: MsgPayload) -> Self {
+    pub fn new(filename: &str, line: u32, payload: MsgPayload) -> Self {
         let time = current_time();
         // This has to be made into a string as there doesn't seem to be a way to get any
         // sort of integral version out of it (at least not in stable)
@@ -148,7 +150,7 @@ impl Message {
     }
 
     #[inline]
-    fn as_slice(&self) -> &[u8] {
+    pub fn as_slice(&self) -> &[u8] {
         self.0.as_slice()
     }
 
