@@ -7,6 +7,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{io, thread};
 
+#[cfg(feature = "insecure-remote")]
+const BIND_ADDR: &str = "0.0.0.0";
+#[cfg(not(feature = "insecure-remote"))]
 const BIND_ADDR: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 13579;
 
