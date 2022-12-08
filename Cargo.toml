@@ -1,2 +1,2 @@
 [workspace]
-members = ["rdbg", "rdbg_view"]
+members = ["rdbg", "rdbg-client", "rdbg-view"]

@@ -1,17 +1,15 @@
 [package]
-name = "rdbg"
+name = "rdbg-client"
 version = "0.1.0"
 authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
 license = "MIT OR Apache-2.0"
-description = "Quick and dirty Rust remote debugging"
-repository = "https://github.com/nu11ptr/rdbg/tree/main/rdbg"
-documentation = "https://docs.rs/rdbg"
+description = "The client library for rdbg"
+repository = "https://github.com/nu11ptr/rdbg/tree/main/rdbg-client"
+documentation = "https://docs.rs/rdbg-client"
 keywords = ["debug", "debugger", "development"]
 categories = ["development-tools", "debugging"]
 readme = "README.md"
 edition = "2021"
 
-[features]
-default = ["enabled"]
-enabled = []
-insecure-remote = []
+[dev-dependencies]
+rdbg = { path = "../rdbg" }

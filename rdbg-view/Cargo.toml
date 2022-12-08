@@ -1,0 +1,19 @@
+[package]
+name = "rdbg-view"
+version = "0.1.0"
+authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
+license = "MIT OR Apache-2.0"
+description = "A basic command-line viewer for rdbg"
+repository = "https://github.com/nu11ptr/rdbg/tree/main/rdbg_view"
+documentation = "https://docs.rs/rdbg_view"
+keywords = ["debug", "debugger", "development"]
+categories = ["development-tools", "debugging"]
+readme = "README.md"
+edition = "2021"
+
+[[bin]]
+path = "src/main.rs"
+name = "rdbgview"
+
+[dependencies]
+rdbg-client = { path = "../rdbg-client" }

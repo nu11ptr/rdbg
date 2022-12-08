@@ -1,4 +1,4 @@
-use rdbg_view::{Error, Event, MsgIterator, DEFAULT_ADDR, DEFAULT_PORT};
+use rdbg_client::{Error, Event, MsgIterator, DEFAULT_ADDR, DEFAULT_PORT};
 
 fn main() {
     eprintln!("*** Trying to connect to {DEFAULT_ADDR}:{DEFAULT_PORT}... ***");

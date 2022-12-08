@@ -7,8 +7,15 @@ name = "rdbg"
 version = "0.1.0"
 
 [[package]]
-name = "rdbg_view"
+name = "rdbg-client"
 version = "0.1.0"
 dependencies = [
  "rdbg",
+]
+
+[[package]]
+name = "rdbg-view"
+version = "0.1.0"
+dependencies = [
+ "rdbg-client",
 ]
