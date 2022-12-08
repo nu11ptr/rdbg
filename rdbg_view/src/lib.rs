@@ -326,7 +326,10 @@ impl Iterator for MsgIterator {
                     // We know this is long enough - guaranteed by read above
                     let len = self.buffer.read_u32().unwrap();
 
-                    match self.buffer.read_from_stream(stream, len as usize) {
+                    match self
+                        .buffer
+                        .read_from_stream(stream, len as usize - LEN_FIELD_SIZE)
+                    {
                         Ok(_) => match Message::from_buffer(&mut self.buffer) {
                             Ok(msg) => Some(Ok(Event::Message(msg))),
                             Err(err) => {
