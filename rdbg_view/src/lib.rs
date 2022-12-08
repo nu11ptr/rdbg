@@ -6,10 +6,12 @@ use std::str::{FromStr, Utf8Error};
 use std::time::Duration;
 use std::{io, thread};
 
-const DEFAULT_ADDR: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 13579;
+/// Default IP to connect to on the debugged program
+pub const DEFAULT_ADDR: &str = "127.0.0.1";
+/// Default port to connect to on the debugged program
+pub const DEFAULT_PORT: u16 = 13579;
 
-const CONNECT_WAIT_TIME: u64 = 100; // Milliseconds
+const CONNECT_WAIT_TIME: u64 = 250; // Milliseconds
 const BUFFER_SIZE: usize = 4096;
 const LEN_FIELD_SIZE: usize = size_of::<u32>();
 const WIRE_PROTOCOL_VERSION: u8 = 1;

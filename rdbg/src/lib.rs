@@ -1,8 +1,9 @@
 use std::io::Write;
 use std::mem::size_of;
 use std::net::{TcpListener, TcpStream};
+use std::process::exit;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{io, thread};
 
@@ -13,17 +14,18 @@ const CHAN_MAX_MESSAGES: usize = 32;
 const LEN_FIELD_SIZE: usize = size_of::<u32>();
 const WIRE_PROTOCOL_VERSION: u8 = 1;
 
-static SENDER: Mutex<Option<SyncSender<Message>>> = Mutex::new(None);
+static REMOTE_DEBUG: Mutex<Option<RemoteDebug>> = Mutex::new(None);
 
 // *** msg / vals macros ***
 
 /// Send a debug message to the remote viewer
 ///
-/// ```
+/// ```dontrun
 /// let world = "world!";
 /// rdbg::msg!("Hello {}", world);
 ///
-/// rdbg::msg!(rdbg::port(5000), ["Hello {}", world]);
+/// //rdbg::msg!(rdbg::port(5000), ["Hello {}", world]);
+/// rdbg::wait_and_quit();
 /// ```
 #[macro_export]
 macro_rules! msg {
@@ -42,11 +44,12 @@ macro_rules! msg {
 
 /// Send debug expression name/value pairs to the remote viewer
 ///
-/// ```
+/// ```dontrun
 /// let world = "world!";
 /// rdbg::vals!(world, 1 + 1);
 ///
-/// rdbg::vals!(rdbg::port(5000), [world, 1 + 1]);
+/// // rdbg::vals!(rdbg::port(5000), [world, 1 + 1]);
+/// rdbg::quit_and_wait();
 /// ```
 #[macro_export]
 macro_rules! vals {
@@ -80,7 +83,7 @@ fn current_time() -> u64 {
     // for our lifetimes
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards")
+        .unwrap()
         .as_millis() as u64
 }
 
@@ -156,11 +159,6 @@ impl Message {
     }
 
     #[inline]
-    fn new_bogus() -> Self {
-        Self::new("<bogus>", 1, MsgPayload::Message("".to_string()))
-    }
-
-    #[inline]
     pub fn as_slice(&self) -> &[u8] {
         self.0.as_slice()
     }
@@ -205,113 +203,163 @@ impl Message {
     }
 }
 
+// *** Event ***
+
+enum Event {
+    NewMessage(Message),
+    Quit,
+}
+
 // *** RemoteDebug ***
 
 #[doc(hidden)]
+#[derive(Clone)]
 pub struct RemoteDebug {
-    sender: SyncSender<Message>,
+    sender: SyncSender<Event>,
+    quit: Arc<(Condvar, Mutex<bool>)>,
 }
 
 impl RemoteDebug {
-    fn new(port: u16) -> Self {
-        let sender = &mut *SENDER.lock().expect("Mutex poisoned!");
-
-        // If our global var is already inited, just return it otherwise do one time thread creation
-        let sender = match sender {
-            Some(sender) => sender.clone(),
-            None => {
-                let new_sender = handle_connections(port);
-                *sender = Some(new_sender.clone());
-                new_sender
-            }
-        };
-
-        Self { sender }
+    fn from_sender(sender: SyncSender<Event>) -> Self {
+        Self {
+            sender,
+            quit: Arc::new((Default::default(), Mutex::new(false))),
+        }
     }
 
-    #[doc(hidden)]
+    fn from_port(port: u16) -> Self {
+        // Panic if mutex is poisoned
+        let remote_debug = &mut *REMOTE_DEBUG.lock().unwrap();
+
+        // If our global var is already inited, just return it otherwise do one time thread creation
+        match remote_debug {
+            Some(remote_debug) => remote_debug.clone(),
+            None => {
+                let debug = handle_connections(port);
+                *remote_debug = Some(debug.clone());
+                debug
+            }
+        }
+    }
+
+    fn notify(&self) {
+        let (var, lock) = &*self.quit;
+        // Panic if mutex is poisoned
+        let mut quit = lock.lock().unwrap();
+        *quit = true;
+        var.notify_all();
+    }
+
     pub fn send_message(&self, filename: &str, line: u32, payload: MsgPayload) {
-        // We have no good way to report errors, so just unwrap and panic, if needed
-        // (can likely only happen if our thread panics freeing the receiver)
-        self.sender
-            .send(Message::new(filename, line, payload))
-            .unwrap();
+        if let Err(err) = self
+            .sender
+            .send(Event::NewMessage(Message::new(filename, line, payload)))
+        {
+            eprintln!("Unable to send new message event: {err}");
+        }
     }
 }
 
 impl Default for RemoteDebug {
     fn default() -> Self {
-        Self::new(DEFAULT_PORT)
+        Self::from_port(DEFAULT_PORT)
     }
 }
 
 // NOTE: This function isn't a part of RemoteDebug simply to make it a few less key strokes for the
 // user in case they want to include this on every macro invocation.
-/// Specify a custom port on the TCP socket when using the [msg] and [vals] macros
+/// Specify a custom port for the TCP socket to listen on when using the [msg] and [vals] macros.
 ///
-/// ```
+/// NOTE: The first time this function or [msg] or [vals] macros are processed determines the port.
+/// Once it is established it will not change no matter what `port` value is used.
+///
+/// ```dontrun
 /// let world = "world!";
 /// rdbg::msg!(rdbg::port(5000), ["Hello {}", world]);
 ///
 /// rdbg::vals!(rdbg::port(5000), [world, 1 + 1]);
+/// rdbg::quit_and_wait();
 /// ```
 #[inline]
 pub fn port(port: u16) -> RemoteDebug {
-    RemoteDebug::new(port)
+    RemoteDebug::from_port(port)
 }
 
-fn handle_connections(port: u16) -> SyncSender<Message> {
-    let (sender, receiver) = sync_channel::<Message>(CHAN_MAX_MESSAGES);
+/// Waits for all existing messages to be sent and then quits. This can be useful if your program
+/// isn't long running and exits before all your messages can be sent to the viewer.
+pub fn wait_and_quit() {
+    // Panic if mutex is poisoned
+    let debug = &mut *REMOTE_DEBUG.lock().unwrap();
 
-    // Fill the channel the first time with bogus messages so that the first actual message will
-    // block. This forces the program to wait until a viewer is connected avoiding a race condition.
-    let msg = Message::new_bogus();
-    for _ in 0..CHAN_MAX_MESSAGES {
-        // We have no good way to report errors, so just unwrap and panic, if needed
-        // (should never happen as there is no way receiver could be closed right now)
-        sender.send(msg.clone()).unwrap();
+    // If no messages have been sent this becomes a no-op, otherwise it quits and waits for
+    // thread to exit
+    if let Some(remote_debug) = debug {
+        match remote_debug.sender.send(Event::Quit) {
+            Ok(_) => {
+                let (var, lock) = &*remote_debug.quit;
+                // Panic if mutex is poisoned
+                let mut quit = lock.lock().unwrap();
+
+                while !*quit {
+                    // Panic if mutex is poisoned
+                    quit = var.wait(quit).unwrap();
+                }
+            }
+            Err(err) => {
+                eprintln!("Unable to send quit event: {err}");
+            }
+        }
     }
+
+    *debug = None;
+}
+
+// *** Connection related functions ***
+
+fn handle_connections(port: u16) -> RemoteDebug {
+    let (sender, receiver) = sync_channel::<Event>(CHAN_MAX_MESSAGES);
+    let debug = RemoteDebug::from_sender(sender);
+    let debug_clone = debug.clone();
 
     thread::spawn(move || {
         let mut curr_msg = None;
-        let mut first_time = true;
 
         loop {
             // We have no good way to report errors, so just unwrap and panic, if needed
             // (likely due to 'address in use' or 'permission denied', so we want to know about that
             // not mysteriously just not receive messages)
-            let listener = TcpListener::bind((BIND_ADDR, port)).unwrap();
-
-            // Per docs, 'incoming' will always return an entry
-            if let Ok(mut stream) = listener.incoming().next().unwrap() {
-                // Only on the very first time do we dump all our bogus messages before processing
-                // the real ones
-                if first_time {
-                    for _ in 0..CHAN_MAX_MESSAGES {
-                        // We have no good way to report errors, so just unwrap and panic, if needed
-                        // (should never happen as there is no way sender could be closed right now)
-                        receiver.recv().unwrap();
+            match TcpListener::bind((BIND_ADDR, port)) {
+                Ok(listener) => {
+                    // Per docs, 'incoming' will always return an entry
+                    if let Ok(mut stream) = listener.incoming().next().unwrap() {
+                        if process_stream(&mut stream, &receiver, &mut curr_msg) {
+                            // Quit signalled - we are done
+                            debug_clone.notify();
+                            break;
+                        }
                     }
-
-                    first_time = false;
                 }
-
-                process_stream(&mut stream, &receiver, &mut curr_msg);
+                Err(err) => {
+                    eprintln!("Unable to listen on {BIND_ADDR}:{port}: {err}");
+                    // We exit instead of panic because this is a separate thread. We want it very
+                    // obvious if for some reason it can't listen on this port so we exit immediately
+                    exit(1);
+                }
             }
         }
     });
 
-    sender
+    debug
 }
 
 fn process_stream(
     stream: &mut TcpStream,
-    receiver: &Receiver<Message>,
+    receiver: &Receiver<Event>,
     curr_msg: &mut Option<Message>,
-) {
+) -> bool {
     // If we hit an error writing out the version just return since we have no good way to report
     if write_to_stream(&WIRE_PROTOCOL_VERSION.to_be_bytes(), stream).is_err() {
-        return;
+        return false;
     }
 
     loop {
@@ -321,9 +369,16 @@ fn process_stream(
             None => {
                 // We have no good way to report errors, so just unwrap and panic, if needed
                 // (this is likely impossible since our SyncSender is in a global var)
-                *curr_msg = Some(receiver.recv().unwrap());
-                // Can't fail, stored above
-                curr_msg.as_ref().unwrap()
+                match receiver.recv().unwrap() {
+                    Event::NewMessage(msg) => {
+                        *curr_msg = Some(msg);
+                        // Can't fail, stored above
+                        curr_msg.as_ref().unwrap()
+                    }
+                    Event::Quit => {
+                        return true;
+                    }
+                }
             }
         };
 
@@ -338,6 +393,8 @@ fn process_stream(
             }
         }
     }
+
+    false
 }
 
 fn write_to_stream(buffer: &[u8], stream: &mut TcpStream) -> io::Result<()> {

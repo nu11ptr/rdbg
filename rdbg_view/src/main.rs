@@ -1,7 +1,7 @@
-use rdbg_view::{Error, Event, MsgIterator};
+use rdbg_view::{Error, Event, MsgIterator, DEFAULT_ADDR, DEFAULT_PORT};
 
 fn main() {
-    eprintln!("*** Waiting for connection... ***");
+    eprintln!("*** Trying to connect to {DEFAULT_ADDR}:{DEFAULT_PORT}... ***");
 
     let iterator = MsgIterator::default();
 
