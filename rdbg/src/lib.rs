@@ -27,6 +27,7 @@ static REMOTE_DEBUG: Mutex<Option<RemoteDebug>> = Mutex::new(None);
 /// //rdbg::msg!(rdbg::port(5000), ["Hello {}", world]);
 /// rdbg::wait_and_quit();
 /// ```
+#[cfg(feature = "enabled")]
 #[macro_export]
 macro_rules! msg {
     ($port:expr, [ $($arg:tt)* ]) => {
@@ -42,6 +43,13 @@ macro_rules! msg {
     };
 }
 
+#[cfg(not(feature = "enabled"))]
+#[macro_export]
+macro_rules! msg {
+    ($port:expr, [ $($arg:tt)* ]) => {};
+    ($($arg:tt)*) => {};
+}
+
 /// Send debug expression name/value pairs to the remote viewer
 ///
 /// ```dontrun
@@ -51,6 +59,7 @@ macro_rules! msg {
 /// // rdbg::vals!(rdbg::port(5000), [world, 1 + 1]);
 /// rdbg::quit_and_wait();
 /// ```
+#[cfg(feature = "enabled")]
 #[macro_export]
 macro_rules! vals {
     ($port:expr, [ $($value:expr),+ $(,)? ]) => {
@@ -72,6 +81,13 @@ macro_rules! vals {
             }
         )),+]))
     };
+}
+
+#[cfg(not(feature = "enabled"))]
+#[macro_export]
+macro_rules! vals {
+    ($port:expr, [ $($value:expr),+ $(,)? ]) => {};
+    ($($value:expr),+ $(,)?) => {};
 }
 
 // *** Message related functions ***
@@ -207,6 +223,8 @@ impl Message {
 
 enum Event {
     NewMessage(Message),
+    // Needed for feature 'enabled'
+    #[allow(dead_code)]
     Quit,
 }
 
@@ -280,13 +298,19 @@ impl Default for RemoteDebug {
 /// rdbg::vals!(rdbg::port(5000), [world, 1 + 1]);
 /// rdbg::quit_and_wait();
 /// ```
+#[cfg(feature = "enabled")]
 #[inline]
 pub fn port(port: u16) -> RemoteDebug {
     RemoteDebug::from_port(port)
 }
 
+#[cfg(not(feature = "enabled"))]
+#[inline]
+pub fn port(_port: u16) {}
+
 /// Waits for all existing messages to be sent and then quits. This can be useful if your program
 /// isn't long running and exits before all your messages can be sent to the viewer.
+#[cfg(feature = "enabled")]
 pub fn wait_and_quit() {
     // Panic if mutex is poisoned
     let debug = &mut *REMOTE_DEBUG.lock().unwrap();
@@ -313,6 +337,9 @@ pub fn wait_and_quit() {
 
     *debug = None;
 }
+
+#[cfg(not(feature = "enabled"))]
+pub fn wait_and_quit() {}
 
 // *** Connection related functions ***
 
