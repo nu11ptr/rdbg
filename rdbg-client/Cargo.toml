@@ -7,7 +7,7 @@ description = "The client library for rdbg"
 repository = "https://github.com/nu11ptr/rdbg/tree/main/rdbg-client"
 documentation = "https://docs.rs/rdbg-client"
 keywords = ["debug", "debugger", "development"]
-categories = ["development-tools", "debugging"]
+categories = ["development-tools::debugging"]
 readme = "README.md"
 edition = "2021"
 

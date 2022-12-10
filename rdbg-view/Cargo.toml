@@ -7,7 +7,7 @@ description = "A basic command-line viewer for rdbg"
 repository = "https://github.com/nu11ptr/rdbg/tree/main/rdbg_view"
 documentation = "https://docs.rs/rdbg_view"
 keywords = ["debug", "debugger", "development"]
-categories = ["development-tools", "debugging"]
+categories = ["development-tools::debugging"]
 readme = "README.md"
 edition = "2021"
 
