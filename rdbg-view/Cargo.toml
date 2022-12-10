@@ -11,9 +11,5 @@ categories = ["development-tools", "debugging"]
 readme = "README.md"
 edition = "2021"
 
-[[bin]]
-path = "src/main.rs"
-name = "rdbgview"
-
 [dependencies]
 rdbg-client = { path = "../rdbg-client" }
