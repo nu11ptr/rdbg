@@ -49,7 +49,7 @@ rdbg::quit_and_wait();
 
 ```toml
 [dependencies]
-rdbg = "0.1.2"
+rdbg = "0.1.4"
 ```
 
 ## Features
