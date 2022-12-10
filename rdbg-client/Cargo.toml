@@ -1,6 +1,6 @@
 [package]
 name = "rdbg-client"
-version = "0.1.0"
+version = "0.1.2"
 authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
 license = "MIT OR Apache-2.0"
 description = "The client library for rdbg"
@@ -12,4 +12,4 @@ readme = "README.md"
 edition = "2021"
 
 [dev-dependencies]
-rdbg = { path = "../rdbg" }
+rdbg = { path = "../rdbg", version = "0.1.2" }
