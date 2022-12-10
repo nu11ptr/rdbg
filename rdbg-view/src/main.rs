@@ -17,14 +17,14 @@ struct Args {
     debug_fmt: bool,
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     eprintln!(
         "*** Trying to connect to {}:{}... ***",
         &args.hostname, args.port
     );
 
-    let iterator = MsgIterator::default();
+    let iterator = MsgIterator::new(&args.hostname, args.port)?;
 
     for event in iterator {
         match event {
@@ -59,6 +59,7 @@ fn main() {
     }
 
     eprintln!("*** Exiting... ***");
+    Ok(())
 }
 
 fn print_message(msg: &Message) {
