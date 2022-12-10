@@ -16,6 +16,7 @@ const DEFAULT_PORT: u16 = 13579;
 const CHAN_MAX_MESSAGES: usize = 32;
 const LEN_FIELD_SIZE: usize = size_of::<u32>();
 const WIRE_PROTOCOL_VERSION: u8 = 1;
+const THREAD_ID_PREFIX: &str = "ThreadId";
 
 static REMOTE_DEBUG: Mutex<Option<RemoteDebug>> = Mutex::new(None);
 
@@ -95,6 +96,44 @@ macro_rules! vals {
 
 // *** Message related functions ***
 
+fn current_thread() -> String {
+    // This has to be made into a string as there doesn't seem to be a way to get any
+    // sort of integral version out of it (at least not in stable)
+    parse_thread_id(format!("{:?}", thread::current().id()))
+}
+
+fn parse_thread_id(thread_id: String) -> String {
+    // We optimistically assume the current format, but if it isn't just return
+    // the initial string as-is
+    let mut split = thread_id.split(&['(', ')']);
+    if split.next() == Some(THREAD_ID_PREFIX) {
+        match split.next() {
+            Some(thread_id) if split.next() == Some("") => thread_id.to_string(),
+            _ => thread_id,
+        }
+    } else {
+        thread_id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::parse_thread_id;
+
+    #[test]
+    fn parse_thread_current() {
+        assert_eq!(parse_thread_id("ThreadId(1)".to_string()), "1".to_string());
+    }
+
+    #[test]
+    fn parse_thread_changed() {
+        assert_eq!(
+            parse_thread_id("Thread(1)".to_string()),
+            "Thread(1)".to_string()
+        );
+    }
+}
+
 fn current_time() -> u64 {
     // This can only really fail if time goes to before the epoch, which likely isn't possible
     // on today's system clocks
@@ -153,9 +192,7 @@ pub struct Message(Vec<u8>);
 impl Message {
     pub fn new(filename: &str, line: u32, payload: MsgPayload) -> Self {
         let time = current_time();
-        // This has to be made into a string as there doesn't seem to be a way to get any
-        // sort of integral version out of it (at least not in stable)
-        let thread_id = format!("{:?}", thread::current().id());
+        let thread_id = current_thread();
 
         // Msg length + time + thread id + filename len + line # + payload len
         let len = LEN_FIELD_SIZE // msg len

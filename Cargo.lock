@@ -4,18 +4,18 @@ version = 3
 
 [[package]]
 name = "rdbg"
-version = "0.1.2"
+version = "0.1.3"
 
 [[package]]
 name = "rdbg-client"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "rdbg",
 ]
 
 [[package]]
 name = "rdbg-view"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "rdbg-client",
 ]

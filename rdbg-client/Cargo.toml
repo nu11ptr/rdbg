@@ -1,6 +1,6 @@
 [package]
 name = "rdbg-client"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
 license = "MIT OR Apache-2.0"
 description = "The client library for rdbg"
