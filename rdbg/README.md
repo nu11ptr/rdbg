@@ -10,6 +10,19 @@ Quick and dirty Rust remote debugging. This crate is more or less equivalent to
 but delivers the payloads via a TCP socket to a remote 
 [viewer](https://crates.io/crates/rdbg-view).
 
+### Use Cases
+
+In many cases, for quick debugging the [dbg](https://doc.rust-lang.org/std/macro.dbg.html)
+and [println](https://doc.rust-lang.org/std/macro.println.html) macros will often 
+suffice. However, there are three main use cases where this crate comes in handy:
+
+1. Tests - while it is possible to output from tests it can be tricky to do so at times
+2. Programs with no stdout available (example: Windows services, etc.)
+3. Programs with lots of output, where it is difficult to disambiguate debug output from other output
+
+In all cases, this crate does not replace a regular debugger. If you wish/need to use a
+full-fledged debugger by all means do so.
+
 ### Features
 
 * No dependencies
@@ -28,9 +41,9 @@ rdbg::msg!("Hello {}", world);
 rdbg::vals!(world, 1 + 1);
 ```
 
-That works fine for servers and long running programs, but since the messages are delivered
+That works fine for servers and long-running programs, but since the messages are delivered
 via a different thread there is an implicit race condition. As such, if your program
-is not a server or long running you will likely need the `wait_and_quit` function at
+is not a server or long-running you will likely need the `wait_and_quit` function at
 the end of your program. This will pause execution until all messages have been sent
 via the TCP socket.
 
@@ -49,7 +62,7 @@ rdbg::quit_and_wait();
 
 ```toml
 [dependencies]
-rdbg = "0.1.4"
+rdbg = "0.1"
 ```
 
 ## Features
