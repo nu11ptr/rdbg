@@ -12,4 +12,4 @@ readme = "README.md"
 edition = "2021"
 
 [dependencies]
-rdbg-client = { path = "../rdbg-client" }
+rdbg-client = { path = "../rdbg-client", version = "0.1.0" }
