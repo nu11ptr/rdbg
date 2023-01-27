@@ -177,18 +177,18 @@ dependencies = [
 
 [[package]]
 name = "rdbg"
-version = "0.1.5"
+version = "0.2.0"
 
 [[package]]
 name = "rdbg-client"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "rdbg",
 ]
 
 [[package]]
 name = "rdbg-view"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "clap",
  "rdbg-client",

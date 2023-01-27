@@ -43,9 +43,9 @@ rdbg::vals!(world, 1 + 1);
 
 That works fine for servers and long-running programs, but since the messages are delivered
 via a different thread there is an implicit race condition. As such, if your program
-is not a server or long-running you will likely need the `wait_and_quit` function at
-the end of your program. This will pause execution until all messages have been sent
-via the TCP socket.
+is not a server or long-running you will likely need the `flush` function at
+the end of your program. This will wait for all queued messages to be sent. For failing tests,
+this function will need to be called before the point of crash to see the output.
 
 ```rust
 let world = "world!";
@@ -55,7 +55,7 @@ rdbg::msg!("Hello {}", world);
 // More or less equivalent to `dbg`
 rdbg::vals!(world, 1 + 1);
 // Wait for messages to be transmitted before exiting
-rdbg::quit_and_wait();
+rdbg::flush();
 ```
 
 ## Usage

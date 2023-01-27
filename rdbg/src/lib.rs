@@ -25,11 +25,15 @@ static REMOTE_DEBUG: Mutex<Option<RemoteDebug>> = Mutex::new(None);
 /// Send a debug message to the remote viewer
 ///
 /// ```dontrun
+/// // Default port
 /// let world = "world!";
 /// rdbg::msg!("Hello {}", world);
+/// flush();
 ///
-/// //rdbg::msg!(rdbg::port(5000), ["Hello {}", world]);
-/// rdbg::wait_and_quit();
+/// // Custom port
+/// let debug = rdbg::port(5000);
+/// rdbg::msg!(&debug, ["Hello {}", world]);
+/// debug.flush();
 /// ```
 #[cfg(feature = "enabled")]
 #[macro_export]
@@ -57,11 +61,15 @@ macro_rules! msg {
 /// Send debug expression name/value pairs to the remote viewer
 ///
 /// ```dontrun
+/// // Default port
 /// let world = "world!";
 /// rdbg::vals!(world, 1 + 1);
+/// flush();
 ///
-/// // rdbg::vals!(rdbg::port(5000), [world, 1 + 1]);
-/// rdbg::quit_and_wait();
+/// // Custom port
+/// let debug = rdbg::port(5000);
+/// rdbg::vals!(&debug, [world, 1 + 1]);
+/// debug.flush();
 /// ```
 #[cfg(feature = "enabled")]
 #[macro_export]
@@ -263,9 +271,48 @@ impl Message {
 
 enum Event {
     NewMessage(Message),
-    // Needed for feature 'enabled'
-    #[allow(dead_code)]
-    Quit,
+    Flush,
+}
+
+// *** Flushed ***
+
+#[derive(Clone)]
+struct Flushed(Arc<(Condvar, Mutex<bool>)>);
+
+impl Flushed {
+    #[inline]
+    fn new() -> Self {
+        Self(Arc::new((Default::default(), Mutex::new(false))))
+    }
+
+    fn flushed(&self) {
+        let (var, lock) = &*self.0;
+        // Panic if mutex is poisoned
+        let mut flushed = lock.lock().unwrap();
+        *flushed = true;
+        var.notify_one();
+    }
+
+    fn flush_and_wait(&self, sender: &SyncSender<Event>) {
+        match sender.send(Event::Flush) {
+            Ok(_) => {
+                let (var, lock) = &*self.0;
+                // Panic if mutex is poisoned
+                let mut flushed = lock.lock().unwrap();
+
+                while !*flushed {
+                    // Panic if mutex is poisoned
+                    flushed = var.wait(flushed).unwrap();
+                }
+
+                // Reset before releasing lock
+                *flushed = false;
+            }
+            Err(err) => {
+                eprintln!("Unable to send quit event: {err}");
+            }
+        }
+    }
 }
 
 // *** RemoteDebug ***
@@ -274,14 +321,14 @@ enum Event {
 #[derive(Clone)]
 pub struct RemoteDebug {
     sender: SyncSender<Event>,
-    quit: Arc<(Condvar, Mutex<bool>)>,
+    flush: Flushed,
 }
 
 impl RemoteDebug {
     fn from_sender(sender: SyncSender<Event>) -> Self {
         Self {
             sender,
-            quit: Arc::new((Default::default(), Mutex::new(false))),
+            flush: Flushed::new(),
         }
     }
 
@@ -300,14 +347,6 @@ impl RemoteDebug {
         }
     }
 
-    fn notify(&self) {
-        let (var, lock) = &*self.quit;
-        // Panic if mutex is poisoned
-        let mut quit = lock.lock().unwrap();
-        *quit = true;
-        var.notify_all();
-    }
-
     pub fn send_message(&self, filename: &str, line: u32, payload: MsgPayload) {
         if let Err(err) = self
             .sender
@@ -315,6 +354,11 @@ impl RemoteDebug {
         {
             eprintln!("Unable to send new message event: {err}");
         }
+    }
+
+    #[inline]
+    pub fn flush(&self) {
+        self.flush.flush_and_wait(&self.sender);
     }
 }
 
@@ -336,7 +380,7 @@ impl Default for RemoteDebug {
 /// rdbg::msg!(rdbg::port(5000), ["Hello {}", world]);
 ///
 /// rdbg::vals!(rdbg::port(5000), [world, 1 + 1]);
-/// rdbg::quit_and_wait();
+/// rdbg::flush();
 /// ```
 #[cfg(feature = "enabled")]
 #[inline]
@@ -348,38 +392,27 @@ pub fn port(port: u16) -> RemoteDebug {
 #[inline]
 pub fn port(_port: u16) {}
 
-/// Waits for all existing messages to be sent and then quits. This can be useful if your program
-/// isn't long running and exits before all your messages can be sent to the viewer.
+/// Flush msg/val queue for default port
+///
+/// NOTE: The first time this function or [msg] or [vals] macros are processed determines the port.
+/// Once it is established it will not change even if custom port macros or functions are called.
+///
+/// ```dontrun
+/// let world = "world!";
+/// rdbg::msg!(rdbg::port(5000), ["Hello {}", world]);
+///
+/// rdbg::vals!(rdbg::port(5000), [world, 1 + 1]);
+/// rdbg::flush();
+/// ```
 #[cfg(feature = "enabled")]
-pub fn wait_and_quit() {
-    // Panic if mutex is poisoned
-    let debug = &mut *REMOTE_DEBUG.lock().unwrap();
-
-    // If no messages have been sent this becomes a no-op, otherwise it quits and waits for
-    // thread to exit
-    if let Some(remote_debug) = debug {
-        match remote_debug.sender.send(Event::Quit) {
-            Ok(_) => {
-                let (var, lock) = &*remote_debug.quit;
-                // Panic if mutex is poisoned
-                let mut quit = lock.lock().unwrap();
-
-                while !*quit {
-                    // Panic if mutex is poisoned
-                    quit = var.wait(quit).unwrap();
-                }
-            }
-            Err(err) => {
-                eprintln!("Unable to send quit event: {err}");
-            }
-        }
-    }
-
-    *debug = None;
+#[inline]
+pub fn flush() {
+    RemoteDebug::default().flush();
 }
 
 #[cfg(not(feature = "enabled"))]
-pub fn wait_and_quit() {}
+#[inline]
+pub fn flush() {}
 
 // *** Connection related functions ***
 
@@ -399,9 +432,8 @@ fn handle_connections(port: u16) -> RemoteDebug {
                 Ok(listener) => {
                     // Per docs, 'incoming' will always return an entry
                     if let Ok(mut stream) = listener.incoming().next().unwrap() {
-                        if process_stream(&mut stream, &receiver, &mut curr_msg) {
+                        if process_stream(&mut stream, &receiver, &mut curr_msg, &debug_clone) {
                             // Quit signalled - we are done
-                            debug_clone.notify();
                             break;
                         }
                     }
@@ -423,6 +455,7 @@ fn process_stream(
     stream: &mut TcpStream,
     receiver: &Receiver<Event>,
     curr_msg: &mut Option<Message>,
+    debug: &RemoteDebug,
 ) -> bool {
     // If we hit an error writing out the version just return since we have no good way to report
     if write_to_stream(&WIRE_PROTOCOL_VERSION.to_be_bytes(), stream).is_err() {
@@ -442,8 +475,9 @@ fn process_stream(
                         // Can't fail, stored above
                         curr_msg.as_ref().unwrap()
                     }
-                    Event::Quit => {
-                        return true;
+                    Event::Flush => {
+                        debug.flush.flushed();
+                        continue;
                     }
                 }
             }

@@ -16,5 +16,5 @@ NOTE: If you are simply looking for a basic CLI viewer then use
 
 ```toml
 [dependencies]
-rdbg = "0.1.2"
+rdbg = "0.1"
 ```
