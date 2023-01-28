@@ -1,6 +1,6 @@
 [package]
 name = "rdbg-view"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
 license = "MIT OR Apache-2.0"
 description = "A basic command-line viewer for rdbg"
@@ -12,5 +12,5 @@ readme = "README.md"
 edition = "2021"
 
 [dependencies]
-rdbg-client = { path = "../rdbg-client", version = "0.1.4" }
+rdbg-client = { path = "../rdbg-client", version = "0.1.5" }
 clap = { version = "4", features = ["derive"] }

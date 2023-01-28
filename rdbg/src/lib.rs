@@ -45,15 +45,48 @@ macro_rules! msg {
     };
 
     ($($arg:tt)*) => {
-        $crate::RemoteDebug::default().send_message(file!(), line!(), $crate::MsgPayload::Message(
-            std::fmt::format(format_args!($($arg)*))
-        ))
+        $crate::msg!($crate::RemoteDebug::default(), [ $($arg)* ])
     };
 }
 
 #[cfg(not(feature = "enabled"))]
 #[macro_export]
 macro_rules! msg {
+    ($port:expr, [ $($arg:tt)* ]) => {};
+    ($($arg:tt)*) => {};
+}
+
+/// Send a debug message to the remote viewer (with flush)
+///
+/// ```dontrun
+/// // Default port
+/// let world = "world!";
+/// rdbg::msgf!("Hello {}", world);
+/// flush();
+///
+/// // Custom port
+/// let debug = rdbg::port(5000);
+/// rdbg::msgf!(&debug, ["Hello {}", world]);
+/// debug.flush();
+/// ```
+#[cfg(feature = "enabled")]
+#[macro_export]
+macro_rules! msgf {
+    ($port:expr, [ $($arg:tt)* ]) => {{
+        $port.send_message(file!(), line!(), $crate::MsgPayload::Message(
+            std::fmt::format(format_args!($($arg)*))
+        ));
+        $port.flush();
+    }};
+
+    ($($arg:tt)*) => {
+        $crate::msgf!($crate::RemoteDebug::default(), [ $($arg)* ])
+    };
+}
+
+#[cfg(not(feature = "enabled"))]
+#[macro_export]
+macro_rules! msgf {
     ($port:expr, [ $($arg:tt)* ]) => {};
     ($($arg:tt)*) => {};
 }
@@ -85,19 +118,52 @@ macro_rules! vals {
     };
 
     ($($value:expr),+ $(,)?) => {
-        $crate::RemoteDebug::default().send_message(file!(), line!(), $crate::MsgPayload::Values(vec![$((
-            match $value {
-                val => {
-                    (stringify!($value), format!("{:#?}", &val))
-                }
-            }
-        )),+]))
+        $crate::vals!($crate::RemoteDebug::default(), [ $($value),+ ])
     };
 }
 
 #[cfg(not(feature = "enabled"))]
 #[macro_export]
 macro_rules! vals {
+    ($port:expr, [ $($value:expr),+ $(,)? ]) => {};
+    ($($value:expr),+ $(,)?) => {};
+}
+
+/// Send debug expression name/value pairs to the remote viewer (with flush)
+///
+/// ```dontrun
+/// // Default port
+/// let world = "world!";
+/// rdbg::valsf!(world, 1 + 1);
+/// flush();
+///
+/// // Custom port
+/// let debug = rdbg::port(5000);
+/// rdbg::valsf!(&debug, [world, 1 + 1]);
+/// debug.flush();
+/// ```
+#[cfg(feature = "enabled")]
+#[macro_export]
+macro_rules! valsf {
+    ($port:expr, [ $($value:expr),+ $(,)? ]) => {{
+        $port.send_message(file!(), line!(), $crate::MsgPayload::Values(vec![$((
+            match $value {
+                val => {
+                    (stringify!($value), format!("{:#?}", &val))
+                }
+            }
+        )),+]));
+        $port.flush();
+    }};
+
+    ($($value:expr),+ $(,)?) => {
+        $crate::valsf!($crate::RemoteDebug::default(), [ $($value),+ ])
+    };
+}
+
+#[cfg(not(feature = "enabled"))]
+#[macro_export]
+macro_rules! valsf {
     ($port:expr, [ $($value:expr),+ $(,)? ]) => {};
     ($($value:expr),+ $(,)?) => {};
 }

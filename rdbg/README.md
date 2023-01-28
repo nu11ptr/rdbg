@@ -62,7 +62,7 @@ rdbg::flush();
 
 ```toml
 [dependencies]
-rdbg = "0.1"
+rdbg = "0.2"
 ```
 
 ## Features
